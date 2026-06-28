@@ -316,7 +316,41 @@ Only numbers that exist as active DIDs are allowed into billing.
 Unknown numbers are rejected.
 ```
 
-### Change 5: Add DID guard AGI script
+### Change 5: Add outbound-only trunk reject context
+
+File:
+
+```text
+/etc/asterisk/extensions.conf
+```
+
+Add this include if it is missing:
+
+```ini
+#include extensions_outbound_only.conf
+```
+
+Then create:
+
+```text
+/etc/asterisk/extensions_outbound_only.conf
+```
+
+Content:
+
+```ini
+[outbound-only]
+exten => _.,1,NoOp(Reject inbound call received on outbound-only provider trunk: ${CHANNEL(endpoint)})
+ same => n,Hangup(21)
+
+exten => s,1,Hangup(21)
+exten => i,1,Hangup(21)
+exten => h,1,Hangup()
+```
+
+Use `outbound-only` as the incoming context for provider trunks that are only used for outbound calls.
+
+### Change 6: Add DID guard AGI script
 
 File:
 
@@ -1359,6 +1393,14 @@ Provider trunks can be:
 
 They should stay in Magnus trunk settings, not SIP user settings.
 
+If a provider trunk is used only for outbound calls, its incoming context should be:
+
+```text
+outbound-only
+```
+
+This context rejects any inbound INVITE that matches the outbound trunk identity. It does not stop Magnus from sending outbound calls through the trunk.
+
 ## [DID_CATCH_ALL] 5. DID Catch-All Stays Separate
 
 Inbound DID catch-all should not go directly to `billing`.
@@ -1568,7 +1610,7 @@ Call an active DID.
 Expected flow:
 
 ```text
-Provider trunk or anonymous provider INVITE
+Anonymous provider INVITE
 -> public-did-inbound
 -> DID check
 -> billing
@@ -1602,4 +1644,12 @@ Provider outbound:
 ```text
 Magnus
 -> Voxbeam / MyVoIP / other carrier trunk
+```
+
+Outbound-only provider trunk inbound protection:
+
+```text
+Provider trunk identity receives inbound INVITE
+-> outbound-only
+-> reject
 ```
