@@ -139,7 +139,6 @@ backup_file "$ASTERISK_DIR/extensions.conf"
 backup_file "$ASTERISK_DIR/pjsip.conf"
 backup_file "$ASTERISK_DIR/rtp.conf"
 backup_file "$ASTERISK_DIR/extensions_public_did.conf"
-backup_file "$ASTERISK_DIR/extensions_outbound_only.conf"
 backup_file "$MAGNUS_ROOT/resources/asterisk/public_did_guard.php"
 
 if [[ -f "$ASTERISK_DIR/res_config_mysql.conf" ]] && command -v mysqldump >/dev/null 2>&1; then
@@ -542,67 +541,17 @@ EOF
   fi
 }
 
-write_outbound_only_context() {
-  local ext_file="$ASTERISK_DIR/extensions_outbound_only.conf"
-
-  log "Writing outbound-only provider trunk reject context: $ext_file"
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    cat > "$ext_file" <<'EOF'
-[outbound-only]
-exten => _.,1,NoOp(Reject inbound call received on outbound-only provider trunk: ${CHANNEL(endpoint)})
- same => n,Hangup(21)
-
-exten => s,1,Hangup(21)
-exten => i,1,Hangup(21)
-exten => h,1,Hangup()
-EOF
-  fi
-}
-
 ensure_extensions_include() {
   local file="$ASTERISK_DIR/extensions.conf"
-  local includes=(
-    "extensions_public_did.conf"
-    "extensions_outbound_only.conf"
-  )
-  local include
-
-  for include in "${includes[@]}"; do
-    if grep -Eq "^[[:space:]]*#include[[:space:]]+$include" "$file"; then
-      log "extensions.conf already includes $include."
-      continue
-    fi
-
-    log "Adding #include $include to extensions.conf."
-    if [[ "$DRY_RUN" -eq 0 ]]; then
-      printf '\n#include %s\n' "$include" >> "$file"
-    fi
-  done
-}
-
-protect_outbound_trunk_contexts() {
-  log "Moving outbound provider trunks away from public-did-inbound when present."
-  if [[ "$DRY_RUN" -eq 1 ]]; then
+  if grep -Eq '^[[:space:]]*#include[[:space:]]+extensions_public_did\.conf' "$file"; then
+    log "extensions.conf already includes extensions_public_did.conf."
     return
   fi
 
-  php <<'PHP'
-<?php
-$config = parse_ini_file('/etc/asterisk/res_config_mysql.conf');
-if (!$config || empty($config['dbhost']) || empty($config['dbname']) || empty($config['dbuser'])) {
-    fwrite(STDERR, "Could not parse DB settings; skipping trunk context protection\n");
-    exit(0);
-}
-
-$pdo = new PDO(
-    'mysql:host=' . $config['dbhost'] . ';dbname=' . $config['dbname'] . ';charset=utf8',
-    $config['dbuser'],
-    $config['dbpass'] ?? '',
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-);
-
-$pdo->exec("UPDATE pkg_trunk SET context = 'outbound-only' WHERE context = 'public-did-inbound'");
-PHP
+  log "Adding #include extensions_public_did.conf to extensions.conf."
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    printf '\n#include extensions_public_did.conf\n' >> "$file"
+  fi
 }
 
 patch_pjsip_custom() {
@@ -746,9 +695,7 @@ patch_rtp_conf() {
 patch_mb_acc
 patch_user_create_sip_toggle
 write_did_guard_files
-write_outbound_only_context
 ensure_extensions_include
-protect_outbound_trunk_contexts
 patch_pjsip_custom
 patch_pjsip_audio
 patch_rtp_conf
@@ -767,9 +714,7 @@ log "Verification output:"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   grep -n 'set_var=MB_ACC' "$MAGNUS_ROOT/protected/components/AsteriskAccess.php" || true
   grep -n 'extensions_public_did.conf' "$ASTERISK_DIR/extensions.conf" || true
-  grep -n 'extensions_outbound_only.conf' "$ASTERISK_DIR/extensions.conf" || true
   asterisk -rx "dialplan show public-did-inbound" || true
-  asterisk -rx "dialplan show outbound-only" || true
   asterisk -rx "pjsip show endpoint anonymous" || true
   asterisk -rx "pjsip show registrations" || true
 fi
