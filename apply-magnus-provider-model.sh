@@ -135,6 +135,7 @@ while IFS= read -r -d '' app_js; do
   backup_file "$app_js"
 done < <(find "$MAGNUS_ROOT" -maxdepth 2 -name app.js -type f -print0)
 backup_file "$ASTERISK_DIR/pjsip_custom.conf"
+backup_file "$ASTERISK_DIR/pjsip_magnus.conf"
 backup_file "$ASTERISK_DIR/extensions.conf"
 backup_file "$ASTERISK_DIR/pjsip.conf"
 backup_file "$ASTERISK_DIR/rtp.conf"
@@ -554,6 +555,38 @@ ensure_extensions_include() {
   fi
 }
 
+set_provider_trunks_context_billing() {
+  log "Setting provider trunk context to billing."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+
+  php <<'PHP'
+<?php
+$config = parse_ini_file('/etc/asterisk/res_config_mysql.conf');
+if (!$config || empty($config['dbhost']) || empty($config['dbname']) || empty($config['dbuser'])) {
+    fwrite(STDERR, "Could not parse DB settings; skipping trunk context update\n");
+    exit(0);
+}
+
+$pdo = new PDO(
+    'mysql:host=' . $config['dbhost'] . ';dbname=' . $config['dbname'] . ';charset=utf8',
+    $config['dbuser'],
+    $config['dbpass'] ?? '',
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+);
+
+$pdo->exec("UPDATE pkg_trunk SET context = 'billing' WHERE context IS NULL OR context <> 'billing'");
+PHP
+
+  if [[ -f "$ASTERISK_DIR/pjsip_magnus.conf" ]]; then
+    sed -i \
+      -e 's/context = public-did-inbound/context = billing/g' \
+      -e 's/context = outbound-only/context = billing/g' \
+      "$ASTERISK_DIR/pjsip_magnus.conf"
+  fi
+}
+
 patch_pjsip_custom() {
   local file="$ASTERISK_DIR/pjsip_custom.conf"
   log "Adding/updating global endpoint order and anonymous DID endpoint in pjsip_custom.conf."
@@ -696,6 +729,7 @@ patch_mb_acc
 patch_user_create_sip_toggle
 write_did_guard_files
 ensure_extensions_include
+set_provider_trunks_context_billing
 patch_pjsip_custom
 patch_pjsip_audio
 patch_rtp_conf

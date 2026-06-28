@@ -43,8 +43,9 @@ bash /root/apply-magnus-provider-model.sh --dry-run --public-ip YOUR_PUBLIC_MAGN
 
 ```text
 Customer PBXs = SIP Users in context billing
-Provider carriers = Trunks
-DID catch-all = public-did-inbound
+Provider carriers = Trunks in context billing
+DID catch-all anonymous endpoint = public-did-inbound
 ```
 
 Do not create one inbound trunk per DID. Inbound DIDs should use the separate catch-all DID context and only allow active DIDs configured in MagnusBilling.
+Do not set outbound provider trunks to the DID catch-all context.

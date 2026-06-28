@@ -1359,6 +1359,14 @@ Provider trunks can be:
 
 They should stay in Magnus trunk settings, not SIP user settings.
 
+For outbound carrier trunks, use:
+
+```text
+context = billing
+```
+
+Do not set outbound carrier trunks to `public-did-inbound`. The DID catch-all context is only for the anonymous DID entry point.
+
 ## [DID_CATCH_ALL] 5. DID Catch-All Stays Separate
 
 Inbound DID catch-all should not go directly to `billing`.
