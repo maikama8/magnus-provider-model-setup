@@ -226,6 +226,49 @@ if ($src === false) {
     exit(1);
 }
 
+if (strpos($src, 'function getDefaultClientGroupId') === false) {
+    $old = <<<'OLD'
+    public function beforeSave($values)
+    {
+OLD;
+    $new = <<<'NEW'
+    protected function getDefaultClientGroupId()
+    {
+        $modelGroupUser = GroupUser::model()->find('id_user_type = 3');
+        return isset($modelGroupUser->id) ? $modelGroupUser->id : 3;
+    }
+
+    public function beforeSave($values)
+    {
+NEW;
+    $src = str_replace($old, $new, $src, $count);
+    if ($count < 1) {
+        fwrite(STDERR, "Could not find beforeSave insert point in $controller\n");
+        exit(1);
+    }
+}
+
+if (strpos($src, "\$values['id_group'] = \$this->getDefaultClientGroupId();") === false) {
+    $old = <<<'OLD'
+        if ($this->isNewRecord) {
+
+            $groupType = GroupUser::model()->find(
+OLD;
+    $new = <<<'NEW'
+        if ($this->isNewRecord) {
+            if (empty($values['id_group']) && Yii::app()->session['isAdmin'] == true) {
+                $values['id_group'] = $this->getDefaultClientGroupId();
+            }
+
+            $groupType = GroupUser::model()->find(
+NEW;
+    $src = str_replace($old, $new, $src, $count);
+    if ($count < 1) {
+        fwrite(STDERR, "Could not find new-record group insert point in $controller\n");
+        exit(1);
+    }
+}
+
 if (strpos($src, 'function shouldCreateSipUser') === false) {
     $old = <<<'OLD'
     public function afterSave($model, $values)
@@ -328,6 +371,10 @@ $passwordField = '{name:"password",fieldLabel:t("Password"),minLength:6,hidden:A
 $checkbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:false,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
 $oldCheckedCheckbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
 $oldLabelCheckbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("Create SIP user"),boxLabel:t("Automatically create SIP user"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
+$modernGroupPlain = '{xtype:"groupusercombo",name:"id_group",fieldLabel:t("Group"),allowBlank:!App.user.isAdmin,hidden:!App.user.isAdmin}';
+$modernGroupDefault = '{xtype:"groupusercombo",name:"id_group",fieldLabel:t("Group"),value:3,allowBlank:!App.user.isAdmin,hidden:!App.user.isAdmin}';
+$classicGroupPlain = '{xtype:"groupusercombo",allowBlank:!App.user.isAdmin,hidden:!App.user.isAdmin}';
+$classicGroupDefault = '{xtype:"groupusercombo",value:3,allowBlank:!App.user.isAdmin,hidden:!App.user.isAdmin}';
 $patched = 0;
 foreach (glob($root . '/*/app.js') ?: [] as $app) {
     $appSrc = file_get_contents($app);
@@ -336,10 +383,26 @@ foreach (glob($root . '/*/app.js') ?: [] as $app) {
     }
 
     $updated = str_replace([$checkbox, $oldCheckedCheckbox, $oldLabelCheckbox], '', $appSrc);
+    $updated = str_replace($modernGroupDefault, $modernGroupPlain, $updated);
+    $updated = str_replace($classicGroupDefault, $classicGroupPlain, $updated);
+
     if (strpos($updated, $passwordField) === false) {
         continue;
     }
     $updated = str_replace($passwordField, $passwordField . $checkbox, $updated, $count);
+
+    $marker = 'name:"create_sip_user"';
+    $idx = strpos($updated, $marker);
+    if ($idx !== false) {
+        $window = substr($updated, $idx, 2500);
+        if (strpos($window, $modernGroupPlain) !== false) {
+            $groupPos = strpos($updated, $modernGroupPlain, $idx);
+            $updated = substr($updated, 0, $groupPos) . $modernGroupDefault . substr($updated, $groupPos + strlen($modernGroupPlain));
+        } elseif (strpos($window, $classicGroupPlain) !== false) {
+            $groupPos = strpos($updated, $classicGroupPlain, $idx);
+            $updated = substr($updated, 0, $groupPos) . $classicGroupDefault . substr($updated, $groupPos + strlen($classicGroupPlain));
+        }
+    }
 
     if ($updated === $appSrc) {
         continue;

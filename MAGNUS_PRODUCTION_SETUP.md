@@ -657,6 +657,7 @@ Password: strong portal password
 Email: customer email address
 Plan: select the rate plan this customer should use
 Group: usually Client/Customer group
+Default group: Client is selected automatically for new users
 SIP user / Create automatically: default is unchecked; check it only if this customer should immediately get a SIP login
 Active: Yes
 Credit: starting balance, if the field is available
@@ -705,6 +706,7 @@ Clients -> SIP Users -> Add
 Important behavior:
 
 - Unchecked is the default, so new customers are created without a SIP user unless the operator chooses it.
+- The Group field defaults to Client for new users.
 - Unchecked creates only the customer/user account.
 - Editing an existing user does not delete any existing SIP user.
 - If you create a SIP user later, make sure it belongs to the correct customer.
