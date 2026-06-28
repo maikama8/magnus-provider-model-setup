@@ -185,7 +185,7 @@ Clients -> Users -> Add should allow the operator to choose whether Magnus creat
 
 Expected behavior after the change:
 
-- The `SIP user: Create automatically` checkbox appears first when adding a customer/user.
+- The `SIP user: Create automatically` checkbox appears after the password field when adding a customer/user.
 - Unchecked is the default.
 - If checked, Magnus keeps the normal behavior and creates the SIP user.
 - If unchecked, Magnus creates only the customer/user record.

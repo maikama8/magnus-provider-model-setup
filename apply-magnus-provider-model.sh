@@ -324,8 +324,7 @@ if (file_put_contents($controller, $src) === false) {
     exit(1);
 }
 
-$modernUsername = '{name:"username",fieldLabel:t("Username"),maxLength:20,minLength:4,readOnly:App.user.isClient},';
-$classicUsername = '{name:"username",fieldLabel:t("username"),maxLength:20,minLength:4,readOnly:App.user.isClient},';
+$passwordField = '{name:"password",fieldLabel:t("Password"),minLength:6,hidden:App.user.isClient,allowBlank:App.user.isClient},';
 $checkbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:false,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
 $oldCheckedCheckbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
 $oldLabelCheckbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("Create SIP user"),boxLabel:t("Automatically create SIP user"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
@@ -337,13 +336,10 @@ foreach (glob($root . '/*/app.js') ?: [] as $app) {
     }
 
     $updated = str_replace([$checkbox, $oldCheckedCheckbox, $oldLabelCheckbox], '', $appSrc);
-    if (strpos($updated, $modernUsername) !== false) {
-        $updated = str_replace($modernUsername, $checkbox . $modernUsername, $updated, $count);
-    } elseif (strpos($updated, $classicUsername) !== false) {
-        $updated = str_replace($classicUsername, $checkbox . $classicUsername, $updated, $count);
-    } else {
+    if (strpos($updated, $passwordField) === false) {
         continue;
     }
+    $updated = str_replace($passwordField, $passwordField . $checkbox, $updated, $count);
 
     if ($updated === $appSrc) {
         continue;
