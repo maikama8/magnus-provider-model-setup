@@ -10,7 +10,7 @@ This private repository contains the production setup guide and installer script
 ## What The Script Applies
 
 - Adds `MB_ACC` generation for Magnus SIP users.
-- Adds the `SIP user: Create automatically` option on `Clients -> Users -> Add`.
+- Adds the first-row `SIP user: Create automatically` option on `Clients -> Users -> Add`, unchecked by default.
 - Keeps customer PBXs as SIP users in the `billing` context.
 - Adds the public DID catch-all guard.
 - Updates PJSIP anonymous inbound handling.

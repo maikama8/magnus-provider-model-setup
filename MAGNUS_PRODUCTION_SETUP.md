@@ -185,8 +185,8 @@ Clients -> Users -> Add should allow the operator to choose whether Magnus creat
 
 Expected behavior after the change:
 
-- The `SIP user: Create automatically` checkbox appears when adding a customer/user.
-- Checked is the default.
+- The `SIP user: Create automatically` checkbox appears first when adding a customer/user.
+- Unchecked is the default.
 - If checked, Magnus keeps the normal behavior and creates the SIP user.
 - If unchecked, Magnus creates only the customer/user record.
 - Existing SIP users are not deleted when editing a user.
@@ -657,7 +657,7 @@ Password: strong portal password
 Email: customer email address
 Plan: select the rate plan this customer should use
 Group: usually Client/Customer group
-SIP user / Create automatically: leave checked if this customer should immediately get a SIP login
+SIP user / Create automatically: default is unchecked; check it only if this customer should immediately get a SIP login
 Active: Yes
 Credit: starting balance, if the field is available
 ```
@@ -692,7 +692,9 @@ Field:
 SIP user: Create automatically
 ```
 
-Leave it checked when the customer needs a SIP login immediately for FreePBX, 3CX, Aheeva, Icon, or another PBX.
+Leave it unchecked when you only want to create the customer billing account.
+
+Check it when the customer needs a SIP login immediately for FreePBX, 3CX, Aheeva, Icon, or another PBX.
 
 Uncheck it when you only want to create the customer billing account now and create SIP details later from:
 
@@ -702,7 +704,7 @@ Clients -> SIP Users -> Add
 
 Important behavior:
 
-- Checked is the default, so old Magnus behavior is preserved.
+- Unchecked is the default, so new customers are created without a SIP user unless the operator chooses it.
 - Unchecked creates only the customer/user account.
 - Editing an existing user does not delete any existing SIP user.
 - If you create a SIP user later, make sure it belongs to the correct customer.

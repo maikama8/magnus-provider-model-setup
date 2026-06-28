@@ -236,7 +236,7 @@ OLD;
     $new = <<<'NEW'
     protected function shouldCreateSipUser($values)
     {
-        return ! isset($values['create_sip_user']) || (int) $values['create_sip_user'] === 1;
+        return isset($values['create_sip_user']) && (int) $values['create_sip_user'] === 1;
     }
 
     public function afterSave($model, $values)
@@ -324,21 +324,31 @@ if (file_put_contents($controller, $src) === false) {
     exit(1);
 }
 
-$insertAfter = '{name:"password",fieldLabel:t("Password"),minLength:6,hidden:App.user.isClient,allowBlank:App.user.isClient},';
-$checkbox = $insertAfter . '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
+$modernUsername = '{name:"username",fieldLabel:t("Username"),maxLength:20,minLength:4,readOnly:App.user.isClient},';
+$classicUsername = '{name:"username",fieldLabel:t("username"),maxLength:20,minLength:4,readOnly:App.user.isClient},';
+$checkbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:false,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
+$oldCheckedCheckbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("SIP user"),boxLabel:t("Create automatically"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
+$oldLabelCheckbox = '{xtype:"checkboxfield",name:"create_sip_user",fieldLabel:t("Create SIP user"),boxLabel:t("Automatically create SIP user"),checked:true,inputValue:1,uncheckedValue:0,hidden:App.user.isClient,allowBlank:true},';
 $patched = 0;
 foreach (glob($root . '/*/app.js') ?: [] as $app) {
     $appSrc = file_get_contents($app);
     if ($appSrc === false || strpos($appSrc, 'MBilling.view.user.Form') === false) {
         continue;
     }
-    if (strpos($appSrc, 'create_sip_user') !== false) {
+
+    $updated = str_replace([$checkbox, $oldCheckedCheckbox, $oldLabelCheckbox], '', $appSrc);
+    if (strpos($updated, $modernUsername) !== false) {
+        $updated = str_replace($modernUsername, $checkbox . $modernUsername, $updated, $count);
+    } elseif (strpos($updated, $classicUsername) !== false) {
+        $updated = str_replace($classicUsername, $checkbox . $classicUsername, $updated, $count);
+    } else {
         continue;
     }
-    if (strpos($appSrc, $insertAfter) === false) {
+
+    if ($updated === $appSrc) {
         continue;
     }
-    if (file_put_contents($app, str_replace($insertAfter, $checkbox, $appSrc, $count)) === false || $count < 1) {
+    if (file_put_contents($app, $updated) === false) {
         fwrite(STDERR, "Could not patch $app\n");
         exit(1);
     }
