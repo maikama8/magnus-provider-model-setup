@@ -88,10 +88,35 @@ done
 [[ -d "$ASTERISK_DIR" ]] || die "Asterisk config directory not found: $ASTERISK_DIR"
 [[ -f "$MAGNUS_ROOT/protected/components/AsteriskAccess.php" ]] || die "AsteriskAccess.php not found."
 [[ -f "$MAGNUS_ROOT/protected/controllers/UserController.php" ]] || die "UserController.php not found."
-[[ -f "$ASTERISK_DIR/pjsip_custom.conf" ]] || die "pjsip_custom.conf not found."
 [[ -f "$ASTERISK_DIR/extensions.conf" ]] || die "extensions.conf not found."
 [[ -f "$ASTERISK_DIR/pjsip.conf" ]] || die "pjsip.conf not found."
-[[ -f "$ASTERISK_DIR/rtp.conf" ]] || die "rtp.conf not found."
+
+ensure_optional_asterisk_file() {
+  local file="$1"
+  local name="$2"
+
+  if [[ -e "$file" && ! -f "$file" ]]; then
+    die "$name exists but is not a regular file: $file"
+  fi
+
+  if [[ -f "$file" ]]; then
+    return
+  fi
+
+  log "$name not found; creating $file."
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    mkdir -p "$(dirname "$file")"
+    touch "$file"
+    local owner
+    owner="$(stat -c '%U:%G' "$ASTERISK_DIR/pjsip.conf" 2>/dev/null || true)"
+    if [[ -n "$owner" ]]; then
+      chown "$owner" "$file" 2>/dev/null || true
+    fi
+  fi
+}
+
+ensure_optional_asterisk_file "$ASTERISK_DIR/pjsip_custom.conf" "pjsip_custom.conf"
+ensure_optional_asterisk_file "$ASTERISK_DIR/rtp.conf" "rtp.conf"
 
 if [[ -z "$PUBLIC_IP" ]] && command -v curl >/dev/null 2>&1; then
   PUBLIC_IP="$(curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
