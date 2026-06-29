@@ -42,6 +42,7 @@ What this script applies:
   - Adds optional "SIP user: Create automatically" checkbox to Clients -> Users -> Add.
   - Adds safe public DID catch-all context and AGI guard.
   - Adds/updates anonymous PJSIP endpoint for DID catch-all.
+  - Ensures pjsip.conf includes pjsip_custom.conf.
   - Sets Magnus-side PJSIP/RTP NAT audio settings when --public-ip is provided.
   - Reloads Asterisk and prints verification commands/results.
 EOF
@@ -676,6 +677,42 @@ if (file_put_contents($file, $src) === false) {
 PHP
 }
 
+ensure_pjsip_custom_include() {
+  local file="$ASTERISK_DIR/pjsip.conf"
+  log "Ensuring pjsip.conf includes pjsip_custom.conf."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+
+  php /dev/stdin "$file" <<'PHP'
+<?php
+$file = $argv[1];
+$src = file_get_contents($file);
+if ($src === false) {
+    fwrite(STDERR, "Cannot read $file\n");
+    exit(1);
+}
+
+if (preg_match('/^[ \t]*#include[ \t]+pjsip_custom\.conf[ \t]*$/m', $src)) {
+    exit(0);
+}
+
+$include = "#include pjsip_custom.conf\n";
+if (preg_match('/^[ \t]*#include[ \t]+pjsip_magnus_user\.conf[ \t]*\R/m', $src)) {
+    $src = preg_replace('/(^[ \t]*#include[ \t]+pjsip_magnus_user\.conf[ \t]*\R)/m', "$1$include", $src, 1);
+} elseif (preg_match('/^[ \t]*#include[ \t]+pjsip_magnus\.conf[ \t]*\R/m', $src)) {
+    $src = preg_replace('/(^[ \t]*#include[ \t]+pjsip_magnus\.conf[ \t]*\R)/m', "$1$include", $src, 1);
+} else {
+    $src = rtrim($src) . "\n\n" . $include;
+}
+
+if (file_put_contents($file, $src) === false) {
+    fwrite(STDERR, "Cannot write $file\n");
+    exit(1);
+}
+PHP
+}
+
 patch_pjsip_audio() {
   if [[ -z "$PUBLIC_IP" ]]; then
     log "No public IP available; skipping pjsip.conf external media/signaling update."
@@ -707,7 +744,9 @@ function ensure_key_in_section_body(string $body, string $key, string $value): s
     return rtrim($body) . "\n$key = $value\n";
 }
 
-$pattern = '/^\[transport-udp\]\R(?P<body>.*?)(?=^\[|\z)/ms';
+$src = preg_replace('/^[ \t]*(external_signaling_address|external_media_address|local_net)[ \t]*=.*\R?/m', '', $src);
+
+$pattern = '/^\[transport-udp\]\R(?P<body>.*?)(?=^#include|^\[|\z)/ms';
 if (!preg_match($pattern, $src)) {
     fwrite(STDERR, "Cannot find [transport-udp] section in $file\n");
     exit(1);
@@ -756,6 +795,7 @@ write_did_guard_files
 ensure_extensions_include
 set_provider_trunks_context_billing
 patch_pjsip_custom
+ensure_pjsip_custom_include
 patch_pjsip_audio
 patch_rtp_conf
 
@@ -773,6 +813,7 @@ log "Verification output:"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   grep -n 'set_var=MB_ACC' "$MAGNUS_ROOT/protected/components/AsteriskAccess.php" || true
   grep -n 'extensions_public_did.conf' "$ASTERISK_DIR/extensions.conf" || true
+  grep -n 'pjsip_custom.conf' "$ASTERISK_DIR/pjsip.conf" || true
   asterisk -rx "dialplan show public-did-inbound" || true
   asterisk -rx "pjsip show endpoint anonymous" || true
   asterisk -rx "pjsip show registrations" || true
