@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
+SCRIPT_VERSION="2026-06-30-2"
 MAGNUS_ROOT="/var/www/html/mbilling"
 ASTERISK_DIR="/etc/asterisk"
 PUBLIC_IP=""
@@ -34,6 +35,7 @@ print_banner() {
 
 ==================== MAGNUSBILLING PROVIDER SETUP ==================
 EOF
+  printf 'Setup script version: %s\n\n' "$SCRIPT_VERSION"
 }
 
 usage() {
