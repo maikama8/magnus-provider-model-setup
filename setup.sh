@@ -21,6 +21,21 @@ die() {
   exit 1
 }
 
+print_banner() {
+  cat <<'EOF'
+======================= BY ZARACHTECH.COM.NG =======================
+
+ ______                         _     _            _
+|___  /                        | |   | |          | |
+   / / __ _ _ __ __ _  ___ ___ | |__ | |_ ___  ___| |__
+  / / / _` | '__/ _` |/ __/ _ \| '_ \| __/ _ \/ __| '_ \
+ / /_| (_| | | | (_| | (_| (_) | | | | ||  __/ (__| | | |
+/_____\__,_|_|  \__,_|\___\___/|_| |_|\__\___|\___|_| |_|
+
+==================== MAGNUSBILLING PROVIDER SETUP ==================
+EOF
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -96,6 +111,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+print_banner
 
 [[ "$(id -u)" -eq 0 ]] || die "Run this script as root."
 [[ -d "$MAGNUS_ROOT" ]] || die "Magnus root not found: $MAGNUS_ROOT"
