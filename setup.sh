@@ -161,6 +161,33 @@ is_skip_value() {
   [[ -z "$value" || "$value" == "skip" || "$value" == "none" || "$value" == "no" || "$value" == "n/a" ]]
 }
 
+is_use_detected_value() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  [[ "$value" == "use detected" || "$value" == "detected" || "$value" == "default" ]]
+}
+
+is_ipv4() {
+  local ip="$1"
+  local o1 o2 o3 o4
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r o1 o2 o3 o4 <<<"$ip"
+  for octet in "$o1" "$o2" "$o3" "$o4"; do
+    [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+    ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
+  done
+}
+
+is_ipv4_cidr() {
+  local cidr="$1"
+  local ip mask
+  [[ "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || return 1
+  ip="${cidr%/*}"
+  mask="${cidr#*/}"
+  is_ipv4 "$ip" || return 1
+  [[ "$mask" -ge 0 && "$mask" -le 32 ]]
+}
+
 detect_public_ip() {
   if command -v curl >/dev/null 2>&1; then
     curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true
@@ -190,6 +217,10 @@ prompt_optional_value() {
   fi
 
   read -r answer || answer=""
+  if is_use_detected_value "$answer" && [[ -n "$detected" ]]; then
+    printf '%s' "$detected"
+    return
+  fi
   if [[ -z "$answer" && -n "$detected" ]]; then
     printf '%s' "$detected"
     return
@@ -233,6 +264,14 @@ fi
 
 if [[ -z "$FAIL2BAN_IGNORE" ]]; then
   FAIL2BAN_IGNORE="$(prompt_fail2ban_ignore)"
+fi
+
+if [[ -n "$PUBLIC_IP" ]] && ! is_ipv4 "$PUBLIC_IP"; then
+  die "Invalid public IP value: $PUBLIC_IP"
+fi
+
+if [[ -n "$LOCAL_NET" ]] && ! is_ipv4_cidr "$LOCAL_NET"; then
+  die "Invalid local/private network CIDR value: $LOCAL_NET"
 fi
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
