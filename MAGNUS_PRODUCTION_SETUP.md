@@ -1,6 +1,65 @@
+# Apply the script on the Magnus server first
+
+Run these commands as `root` after MagnusBilling installation is complete:
+
+```bash
+cd /root
+curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/setup.sh -o /root/setup.sh
+chmod +x /root/setup.sh
+bash /root/setup.sh
+```
+
+The script will ask for three optional things:
+
+```text
+Public IP for Asterisk NAT/audio
+Local/private network CIDR
+Fail2Ban ignore IPs/CIDR ranges
+```
+
+Use these simple rules when answering:
+
+- If the script shows the correct detected public IP, press `Enter`.
+- If the server has no private/local network, type `skip` for local network.
+- If you want to stop fail2ban from banning your admin/team IPs, enter them separated by spaces or commas.
+- If you do not want to add fail2ban ignore IPs now, press `Enter`.
+
+Fail2Ban example:
+
+```text
+1.2.3.4 5.6.7.0/24
+```
+
+If you want to pass everything in one command instead of answering prompts:
+
+```bash
+bash /root/setup.sh --public-ip YOUR_PUBLIC_MAGNUS_IP --local-net YOUR_PRIVATE_NETWORK_CIDR --fail2ban-ignore "YOUR_OFFICE_IP YOUR_VPN_CIDR"
+```
+
+To preview without changing files:
+
+```bash
+bash /root/setup.sh --dry-run
+```
+
 # Magnus Production Setup Guide
 
-This guide explains how to make Magnus work as a provider for external PBXs like 3CX, Aheeva, Icon, and FreePBX.
+This guide explains how to make MagnusBilling work as a provider for external PBXs like 3CX, Aheeva, Icon, and FreePBX.
+
+The most important model is:
+
+```text
+Customer PBXs = SIP Users in context billing
+Provider carriers = Trunks
+DID catch-all = public-did-inbound
+```
+
+In simple terms:
+
+- External PBXs connect to Magnus using SIP username/password.
+- Magnus bills the correct SIP user/account.
+- Provider trunks like Voxbeam or MyVoIP stay separate from customer SIP users.
+- Inbound DIDs use the catch-all DID context, not one trunk per DID.
 
 ## Quick Search Index
 
@@ -64,58 +123,15 @@ User inactive
 No route
 ```
 
-Goal:
-
-External PBXs connect to Magnus using SIP username/password.
-Magnus bills the correct SIP user/account.
-Provider trunks remain separate and are used only for upstream providers like Voxbeam or MyVoIP.
-DID catch-all remains separate from customer SIP users.
-
 ## [PRODUCTION_CODE_CHANGES] Exact Production Code Changes
 
-Use this section when applying the test-server work to production. Do these changes after `BACKUP_FIRST`.
-
-Recommended method:
+Use this section to understand what the script applies on production.
 
 ```text
-Use the script apply-magnus-provider-model.sh instead of manually copying every code block.
+Recommended method: run setup.sh instead of manually copying every code block.
 ```
 
 The script also adds the `SIP user: Create automatically` checkbox to `Clients -> Users -> Add`.
-
-Script file prepared locally:
-
-```text
-./apply-magnus-provider-model.sh
-```
-
-After pushing the script to GitHub, the production engineer can run something like:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/apply-magnus-provider-model.sh -o /root/apply-magnus-provider-model.sh
-chmod +x /root/apply-magnus-provider-model.sh
-bash /root/apply-magnus-provider-model.sh --public-ip YOUR_PUBLIC_MAGNUS_IP --local-net YOUR_PRIVATE_NETWORK_CIDR
-```
-
-If the server does not have a private/local network, omit `--local-net`:
-
-```bash
-bash /root/apply-magnus-provider-model.sh --public-ip YOUR_PUBLIC_MAGNUS_IP
-```
-
-To preview actions without changing files:
-
-```bash
-bash /root/apply-magnus-provider-model.sh --dry-run --public-ip YOUR_PUBLIC_MAGNUS_IP --local-net YOUR_PRIVATE_NETWORK_CIDR
-```
-
-Important rule:
-
-```text
-Customer PBXs = SIP Users in context billing
-Provider carriers = Trunks
-DID catch-all = public-did-inbound
-```
 
 ### Change 1: Add MB_ACC to generated SIP users
 
@@ -194,7 +210,7 @@ Expected behavior after the change:
 Recommended method:
 
 ```bash
-bash /root/apply-magnus-provider-model.sh --public-ip YOUR_PUBLIC_MAGNUS_IP --local-net YOUR_PRIVATE_NETWORK_CIDR
+bash /root/setup.sh
 ```
 
 Verify:

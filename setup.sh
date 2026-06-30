@@ -6,6 +6,9 @@ MAGNUS_ROOT="/var/www/html/mbilling"
 ASTERISK_DIR="/etc/asterisk"
 PUBLIC_IP=""
 LOCAL_NET=""
+PUBLIC_IP_SET=0
+LOCAL_NET_SET=0
+FAIL2BAN_IGNORE=""
 SKIP_RELOAD=0
 DRY_RUN=0
 
@@ -21,20 +24,23 @@ die() {
 usage() {
   cat <<'EOF'
 Usage:
-  bash apply-magnus-provider-model.sh [options]
+  bash setup.sh [options]
 
 Options:
   --magnus-root PATH     MagnusBilling path. Default: /var/www/html/mbilling
   --asterisk-dir PATH    Asterisk config path. Default: /etc/asterisk
   --public-ip IP         Public IP for Asterisk external media/signaling.
   --local-net CIDR       Local/private network CIDR, for example YOUR_PRIVATE_NETWORK_CIDR.
+  --fail2ban-ignore LIST IPs/CIDR ranges to add to fail2ban ignoreip.
   --skip-reload          Do not run Asterisk reload commands.
   --dry-run              Show checks but do not edit files.
   -h, --help             Show this help.
 
 Examples:
-  bash apply-magnus-provider-model.sh --public-ip YOUR_PUBLIC_MAGNUS_IP --local-net YOUR_PRIVATE_NETWORK_CIDR
-  bash apply-magnus-provider-model.sh --skip-reload
+  bash setup.sh
+  bash setup.sh --public-ip YOUR_PUBLIC_MAGNUS_IP --local-net YOUR_PRIVATE_NETWORK_CIDR
+  bash setup.sh --fail2ban-ignore "YOUR_OFFICE_IP YOUR_VPN_CIDR"
+  bash setup.sh --skip-reload
 
 What this script applies:
   - Backs up important Magnus/Asterisk files.
@@ -44,6 +50,7 @@ What this script applies:
   - Adds/updates anonymous PJSIP endpoint for DID catch-all.
   - Ensures pjsip.conf includes pjsip_custom.conf.
   - Sets Magnus-side PJSIP/RTP NAT audio settings when --public-ip is provided.
+  - Optionally adds trusted IPs/CIDR ranges to fail2ban ignoreip.
   - Reloads Asterisk and prints verification commands/results.
 EOF
 }
@@ -60,10 +67,16 @@ while [[ $# -gt 0 ]]; do
       ;;
     --public-ip)
       PUBLIC_IP="${2:-}"
+      PUBLIC_IP_SET=1
       shift 2
       ;;
     --local-net)
       LOCAL_NET="${2:-}"
+      LOCAL_NET_SET=1
+      shift 2
+      ;;
+    --fail2ban-ignore)
+      FAIL2BAN_IGNORE="${2:-}"
       shift 2
       ;;
     --skip-reload)
@@ -119,12 +132,88 @@ ensure_optional_asterisk_file() {
 ensure_optional_asterisk_file "$ASTERISK_DIR/pjsip_custom.conf" "pjsip_custom.conf"
 ensure_optional_asterisk_file "$ASTERISK_DIR/rtp.conf" "rtp.conf"
 
-if [[ -z "$PUBLIC_IP" ]] && command -v curl >/dev/null 2>&1; then
-  PUBLIC_IP="$(curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+is_interactive() {
+  [[ -t 0 && -t 1 ]]
+}
+
+is_skip_value() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  [[ -z "$value" || "$value" == "skip" || "$value" == "none" || "$value" == "no" || "$value" == "n/a" ]]
+}
+
+detect_public_ip() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true
+  fi
+}
+
+detect_local_net() {
+  if command -v ip >/dev/null 2>&1; then
+    ip -o -f inet addr show scope global 2>/dev/null | awk '{print $4}' | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | head -1 || true
+  fi
+}
+
+prompt_optional_value() {
+  local label="$1"
+  local detected="$2"
+  local answer=""
+
+  if ! is_interactive; then
+    printf '%s' "$detected"
+    return
+  fi
+
+  if [[ -n "$detected" ]]; then
+    printf '%s [detected: %s, Enter=use detected, type skip to skip]: ' "$label" "$detected" >&2
+  else
+    printf '%s [Enter=skip]: ' "$label" >&2
+  fi
+
+  read -r answer || answer=""
+  if [[ -z "$answer" && -n "$detected" ]]; then
+    printf '%s' "$detected"
+    return
+  fi
+  if is_skip_value "$answer"; then
+    printf ''
+    return
+  fi
+  printf '%s' "$answer"
+}
+
+prompt_fail2ban_ignore() {
+  local answer=""
+
+  if ! is_interactive; then
+    printf ''
+    return
+  fi
+
+  printf 'Fail2Ban ignore IPs/CIDR ranges [comma/space separated, Enter=skip]: ' >&2
+  read -r answer || answer=""
+  if is_skip_value "$answer"; then
+    printf ''
+    return
+  fi
+  printf '%s' "$answer"
+}
+
+DETECTED_PUBLIC_IP=""
+DETECTED_LOCAL_NET=""
+
+if [[ "$PUBLIC_IP_SET" -eq 0 ]]; then
+  DETECTED_PUBLIC_IP="$(detect_public_ip)"
+  PUBLIC_IP="$(prompt_optional_value "Public IP for Asterisk NAT/audio" "$DETECTED_PUBLIC_IP")"
 fi
 
-if [[ -z "$LOCAL_NET" ]] && command -v ip >/dev/null 2>&1; then
-  LOCAL_NET="$(ip -o -f inet addr show scope global 2>/dev/null | awk '{print $4}' | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | head -1 || true)"
+if [[ "$LOCAL_NET_SET" -eq 0 ]]; then
+  DETECTED_LOCAL_NET="$(detect_local_net)"
+  LOCAL_NET="$(prompt_optional_value "Local/private network CIDR" "$DETECTED_LOCAL_NET")"
+fi
+
+if [[ -z "$FAIL2BAN_IGNORE" ]]; then
+  FAIL2BAN_IGNORE="$(prompt_fail2ban_ignore)"
 fi
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -152,6 +241,7 @@ log "Magnus root: $MAGNUS_ROOT"
 log "Asterisk dir: $ASTERISK_DIR"
 log "Public IP: ${PUBLIC_IP:-not set}"
 log "Local net: ${LOCAL_NET:-not set}"
+log "Fail2Ban ignore list additions: ${FAIL2BAN_IGNORE:-not set}"
 log "Backup dir: $BACKUP_DIR"
 
 run mkdir -p "$BACKUP_DIR/files"
@@ -167,6 +257,8 @@ backup_file "$ASTERISK_DIR/pjsip.conf"
 backup_file "$ASTERISK_DIR/rtp.conf"
 backup_file "$ASTERISK_DIR/extensions_public_did.conf"
 backup_file "$MAGNUS_ROOT/resources/asterisk/public_did_guard.php"
+backup_file "/etc/fail2ban/jail.local"
+backup_file "/etc/fail2ban/jail.d/magnus-provider-model-ignoreip.local"
 
 if [[ -f "$ASTERISK_DIR/res_config_mysql.conf" ]] && command -v mysqldump >/dev/null 2>&1; then
   log "Creating best-effort database backup of core Magnus tables."
@@ -789,6 +881,113 @@ patch_rtp_conf() {
   fi
 }
 
+normalize_fail2ban_ignore_input() {
+  local raw="${1//,/ }"
+  local token
+  local values=()
+
+  for token in $raw; do
+    if [[ ! "$token" =~ ^[A-Za-z0-9:._/-]+$ ]]; then
+      die "Unsafe fail2ban ignore value: $token"
+    fi
+    values+=("$token")
+  done
+
+  if [[ "${#values[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  printf '%s\n' "${values[@]}" | awk '!seen[$0]++' | paste -sd' ' -
+}
+
+patch_fail2ban_ignore() {
+  if [[ -z "$FAIL2BAN_IGNORE" ]]; then
+    log "No fail2ban ignore IPs provided; leaving fail2ban unchanged."
+    return
+  fi
+
+  local additions
+  additions="$(normalize_fail2ban_ignore_input "$FAIL2BAN_IGNORE")"
+  if [[ -z "$additions" ]]; then
+    log "No valid fail2ban ignore IPs provided; leaving fail2ban unchanged."
+    return
+  fi
+
+  if [[ ! -d /etc/fail2ban ]]; then
+    log "fail2ban config directory not found; skipping ignoreip update."
+    return
+  fi
+
+  local file="/etc/fail2ban/jail.d/magnus-provider-model-ignoreip.local"
+  if [[ -f /etc/fail2ban/jail.local ]]; then
+    file="/etc/fail2ban/jail.local"
+  fi
+
+  log "Adding fail2ban ignoreip entries to $file: $additions"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+
+  php /dev/stdin "$file" "$additions" <<'PHP'
+<?php
+$file = $argv[1];
+$additions = preg_split('/\s+/', trim($argv[2] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+$src = file_exists($file) ? file_get_contents($file) : '';
+if ($src === false) {
+    fwrite(STDERR, "Cannot read $file\n");
+    exit(1);
+}
+
+function unique_values(array $values): array
+{
+    $seen = [];
+    $out = [];
+    foreach ($values as $value) {
+        $value = trim($value);
+        if ($value === '' || isset($seen[$value])) {
+            continue;
+        }
+        $seen[$value] = true;
+        $out[] = $value;
+    }
+    return $out;
+}
+
+$sectionPattern = '/^\[DEFAULT\]\R(?P<body>.*?)(?=^\[|\z)/ms';
+if (!preg_match($sectionPattern, $src)) {
+    $line = 'ignoreip = ' . implode(' ', unique_values($additions)) . "\n";
+    $src = "[DEFAULT]\n" . $line . "\n" . ltrim($src);
+} else {
+    $src = preg_replace_callback($sectionPattern, static function ($m) use ($additions) {
+        $block = $m[0];
+        if (preg_match('/^[ \t]*ignoreip[ \t]*=[ \t]*(.*)$/m', $block, $ignoreMatch)) {
+            $current = preg_split('/\s+/', trim($ignoreMatch[1]), -1, PREG_SPLIT_NO_EMPTY);
+            $merged = unique_values(array_merge($current, $additions));
+            return preg_replace('/^[ \t]*ignoreip[ \t]*=.*$/m', 'ignoreip = ' . implode(' ', $merged), $block, 1);
+        }
+
+        return preg_replace('/^(\[DEFAULT\]\R)/', '$1ignoreip = ' . implode(' ', unique_values($additions)) . "\n", $block, 1);
+    }, $src, 1);
+}
+
+if (file_put_contents($file, $src) === false) {
+    fwrite(STDERR, "Cannot write $file\n");
+    exit(1);
+}
+PHP
+
+  if command -v fail2ban-client >/dev/null 2>&1; then
+    fail2ban-client reload || systemctl restart fail2ban || log "fail2ban reload/restart failed"
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl restart fail2ban || log "fail2ban restart failed"
+  else
+    log "fail2ban restart command not found; restart fail2ban manually."
+  fi
+}
+
 patch_mb_acc
 patch_user_create_sip_toggle
 write_did_guard_files
@@ -798,6 +997,7 @@ patch_pjsip_custom
 ensure_pjsip_custom_include
 patch_pjsip_audio
 patch_rtp_conf
+patch_fail2ban_ignore
 
 if [[ "$SKIP_RELOAD" -eq 0 ]]; then
   log "Reloading Asterisk dialplan and PJSIP."
