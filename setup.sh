@@ -150,7 +150,7 @@ ensure_optional_asterisk_file "$ASTERISK_DIR/pjsip_custom.conf" "pjsip_custom.co
 ensure_optional_asterisk_file "$ASTERISK_DIR/rtp.conf" "rtp.conf"
 
 is_interactive() {
-  [[ -t 0 && -t 1 ]]
+  [[ -t 0 ]]
 }
 
 is_skip_value() {
@@ -1033,7 +1033,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   grep -n 'pjsip_custom.conf' "$ASTERISK_DIR/pjsip.conf" || true
   asterisk -rx "dialplan show public-did-inbound" || true
   asterisk -rx "pjsip show endpoint anonymous" || true
-  asterisk -rx "pjsip show registrations" || true
 fi
 
 cat <<EOF
