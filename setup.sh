@@ -620,18 +620,16 @@ if ($src === false) {
 }
 
 if (strpos($src, "\$values['qualify']   = 'yes';") === false) {
-    $old = <<<'OLD'
-            $values['regseconds'] = 1;
-            $values['context']    = 'billing';
-            $values['regexten']   = $values['name'];
-OLD;
-    $new = <<<'NEW'
-            $values['regseconds'] = 1;
-            $values['context']    = 'billing';
-            $values['qualify']   = 'yes';
-            $values['regexten']   = $values['name'];
+    $pattern = '/([ \t]*\$values\[\x27regseconds\x27\][ \t]*=[ \t]*1;[ \t]*\R[ \t]*\$values\[\x27context\x27\][ \t]*=[ \t]*\x27billing\x27;[ \t]*\R)([ \t]*\$values\[\x27regexten\x27\][ \t]*=[ \t]*\$values\[\x27name\x27\];)/';
+    $replacement = <<<'NEW'
+${1}            $values['qualify']   = 'yes';
+$2
 NEW;
-    $src = str_replace($old, $new, $src, $count);
+    $src = preg_replace($pattern, $replacement, $src, 1, $count);
+    if ($src === null) {
+        fwrite(STDERR, "Regex failed while patching $controller\n");
+        exit(1);
+    }
     if ($count < 1) {
         fwrite(STDERR, "Could not find manual SIP create defaults in $controller\n");
         exit(1);
