@@ -11,6 +11,7 @@ This private repository contains the production setup guide and installer script
 
 - Adds `MB_ACC` generation for Magnus SIP users.
 - Adds the `SIP user: Create automatically` option after the password field on `Clients -> Users -> Add`, unchecked by default.
+- Defaults manually-created SIP users' `Qualify` NAT setting to `yes`.
 - Defaults the new-user `Group` field to `Client`.
 - Keeps customer PBXs as SIP users in the `billing` context.
 - Adds the public DID catch-all guard.

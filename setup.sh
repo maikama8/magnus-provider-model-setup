@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-SCRIPT_VERSION="2026-06-30-2"
+SCRIPT_VERSION="2026-07-03-1"
 MAGNUS_ROOT="/var/www/html/mbilling"
 ASTERISK_DIR="/etc/asterisk"
 PUBLIC_IP=""
@@ -63,6 +63,7 @@ What this script applies:
   - Backs up important Magnus/Asterisk files.
   - Adds MB_ACC generation to Magnus SIP users if missing.
   - Adds optional "SIP user: Create automatically" checkbox to Clients -> Users -> Add.
+  - Defaults manually-created SIP users' NAT Qualify setting to yes.
   - Adds safe public DID catch-all context and AGI guard.
   - Adds/updates anonymous PJSIP endpoint for DID catch-all.
   - Ensures pjsip.conf includes pjsip_custom.conf.
@@ -121,6 +122,7 @@ print_banner
 [[ -d "$ASTERISK_DIR" ]] || die "Asterisk config directory not found: $ASTERISK_DIR"
 [[ -f "$MAGNUS_ROOT/protected/components/AsteriskAccess.php" ]] || die "AsteriskAccess.php not found."
 [[ -f "$MAGNUS_ROOT/protected/controllers/UserController.php" ]] || die "UserController.php not found."
+[[ -f "$MAGNUS_ROOT/protected/controllers/SipController.php" ]] || die "SipController.php not found."
 [[ -f "$ASTERISK_DIR/extensions.conf" ]] || die "extensions.conf not found."
 [[ -f "$ASTERISK_DIR/pjsip.conf" ]] || die "pjsip.conf not found."
 
@@ -305,6 +307,7 @@ log "Backup dir: $BACKUP_DIR"
 run mkdir -p "$BACKUP_DIR/files"
 backup_file "$MAGNUS_ROOT/protected/components/AsteriskAccess.php"
 backup_file "$MAGNUS_ROOT/protected/controllers/UserController.php"
+backup_file "$MAGNUS_ROOT/protected/controllers/SipController.php"
 while IFS= read -r -d '' app_js; do
   backup_file "$app_js"
 done < <(find "$MAGNUS_ROOT" -maxdepth 2 -name app.js -type f -print0)
@@ -593,6 +596,86 @@ foreach (glob($root . '/*/app.js') ?: [] as $app) {
 
 echo "Patched theme app.js files: $patched\n";
 TOGGLEPHP
+
+  php -l "$controller" >/dev/null
+}
+
+patch_manual_sip_qualify_default() {
+  local controller="$MAGNUS_ROOT/protected/controllers/SipController.php"
+
+  log "Setting manual SIP user creation default Qualify to yes."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+
+  php /dev/stdin "$controller" "$MAGNUS_ROOT" <<'SIPQUALIFYPHP'
+<?php
+$controller = $argv[1];
+$root = rtrim($argv[2], '/');
+
+$src = file_get_contents($controller);
+if ($src === false) {
+    fwrite(STDERR, "Cannot read $controller\n");
+    exit(1);
+}
+
+if (strpos($src, "\$values['qualify']   = 'yes';") === false) {
+    $old = <<<'OLD'
+            $values['regseconds'] = 1;
+            $values['context']    = 'billing';
+            $values['regexten']   = $values['name'];
+OLD;
+    $new = <<<'NEW'
+            $values['regseconds'] = 1;
+            $values['context']    = 'billing';
+            $values['qualify']   = 'yes';
+            $values['regexten']   = $values['name'];
+NEW;
+    $src = str_replace($old, $new, $src, $count);
+    if ($count < 1) {
+        fwrite(STDERR, "Could not find manual SIP create defaults in $controller\n");
+        exit(1);
+    }
+}
+
+if (file_put_contents($controller, $src) === false) {
+    fwrite(STDERR, "Cannot write $controller\n");
+    exit(1);
+}
+
+$patched = 0;
+foreach (glob($root . '/*/app.js') ?: [] as $app) {
+    $appSrc = file_get_contents($app);
+    if ($appSrc === false || strpos($appSrc, 'MBilling.view.sip.Form') === false) {
+        continue;
+    }
+
+    $updated = preg_replace(
+        '/(\{xtype:"yesnostringcombo",name:"qualify",fieldLabel:t\("Qualify"\),value:)"no"(,allowBlank:!App\.user\.isAdmin\})/',
+        '$1"yes"$2',
+        $appSrc,
+        -1,
+        $count
+    );
+
+    if ($updated === null) {
+        fwrite(STDERR, "Regex failed while patching $app\n");
+        exit(1);
+    }
+
+    if ($count < 1 || $updated === $appSrc) {
+        continue;
+    }
+
+    if (file_put_contents($app, $updated) === false) {
+        fwrite(STDERR, "Could not patch $app\n");
+        exit(1);
+    }
+    $patched++;
+}
+
+echo "Patched SIP qualify defaults in theme app.js files: $patched\n";
+SIPQUALIFYPHP
 
   php -l "$controller" >/dev/null
 }
@@ -1048,6 +1131,7 @@ PHP
 
 patch_mb_acc
 patch_user_create_sip_toggle
+patch_manual_sip_qualify_default
 write_did_guard_files
 ensure_extensions_include
 set_provider_trunks_context_billing
