@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-SCRIPT_VERSION="2026-07-03-1"
+SCRIPT_VERSION="2026-07-14-1"
 MAGNUS_ROOT="/var/www/html/mbilling"
 ASTERISK_DIR="/etc/asterisk"
 PUBLIC_IP=""
@@ -63,6 +63,7 @@ What this script applies:
   - Backs up important Magnus/Asterisk files.
   - Adds MB_ACC generation to Magnus SIP users if missing.
   - Adds optional "SIP user: Create automatically" checkbox to Clients -> Users -> Add.
+  - Keeps the SIP auto-create checkbox installed after Magnus GUI updates.
   - Defaults manually-created SIP users' NAT Qualify setting to yes.
   - Adds safe public DID catch-all context and AGI guard.
   - Adds/updates anonymous PJSIP endpoint for DID catch-all.
@@ -318,6 +319,11 @@ backup_file "$ASTERISK_DIR/pjsip.conf"
 backup_file "$ASTERISK_DIR/rtp.conf"
 backup_file "$ASTERISK_DIR/extensions_public_did.conf"
 backup_file "$MAGNUS_ROOT/resources/asterisk/public_did_guard.php"
+backup_file "/usr/local/libexec/magnus-sip-toggle-guard.php"
+backup_file "/etc/systemd/system/magnus-sip-toggle-guard.service"
+backup_file "/etc/systemd/system/magnus-sip-toggle-guard.path"
+backup_file "/etc/systemd/system/magnus-sip-toggle-guard.timer"
+backup_file "/etc/cron.d/magnus-sip-toggle-guard"
 backup_file "/etc/fail2ban/jail.local"
 backup_file "/etc/fail2ban/jail.d/magnus-provider-model-ignoreip.local"
 
@@ -391,13 +397,29 @@ PHP
 
 patch_user_create_sip_toggle() {
   local controller="$MAGNUS_ROOT/protected/controllers/UserController.php"
+  local guard="/usr/local/libexec/magnus-sip-toggle-guard.php"
   log "Adding optional SIP auto-create toggle to user creation."
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return
   fi
 
-  php /dev/stdin "$controller" "$MAGNUS_ROOT" <<'TOGGLEPHP'
+  mkdir -p "$(dirname "$guard")"
+  install -m 0755 /dev/stdin "$guard" <<'TOGGLEPHP'
+#!/usr/bin/env php
 <?php
+if ($argc !== 3) {
+    fwrite(STDERR, "Usage: {$argv[0]} USER_CONTROLLER MAGNUS_ROOT\n");
+    exit(2);
+}
+
+$lockDir = is_dir('/run/lock') && is_writable('/run/lock')
+    ? '/run/lock'
+    : sys_get_temp_dir();
+$lock = fopen(rtrim($lockDir, '/') . '/magnus-sip-toggle-guard.lock', 'c');
+if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
+    exit(0);
+}
+
 $controller = $argv[1];
 $root = rtrim($argv[2], '/');
 $src = file_get_contents($controller);
@@ -405,6 +427,7 @@ if ($src === false) {
     fwrite(STDERR, "Cannot read $controller\n");
     exit(1);
 }
+$originalSrc = $src;
 
 if (strpos($src, 'function getDefaultClientGroupId') === false) {
     $old = <<<'OLD'
@@ -542,9 +565,12 @@ if (strpos($src, 'if ($sipPeersChanged) {') === false) {
     $src = substr($src, 0, $pos) . $new . substr($src, $pos + strlen($old));
 }
 
-if (file_put_contents($controller, $src) === false) {
-    fwrite(STDERR, "Cannot write $controller\n");
-    exit(1);
+$controllerPatched = $src !== $originalSrc;
+if ($controllerPatched) {
+    if (file_put_contents($controller, $src) === false) {
+        fwrite(STDERR, "Cannot write $controller\n");
+        exit(1);
+    }
 }
 
 $passwordField = '{name:"password",fieldLabel:t("Password"),minLength:6,hidden:App.user.isClient,allowBlank:App.user.isClient},';
@@ -556,7 +582,11 @@ $modernGroupDefault = '{xtype:"groupusercombo",name:"id_group",fieldLabel:t("Gro
 $classicGroupPlain = '{xtype:"groupusercombo",allowBlank:!App.user.isAdmin,hidden:!App.user.isAdmin}';
 $classicGroupDefault = '{xtype:"groupusercombo",value:3,allowBlank:!App.user.isAdmin,hidden:!App.user.isAdmin}';
 $patched = 0;
-foreach (glob($root . '/*/app.js') ?: [] as $app) {
+$appFiles = array_unique(array_merge(
+    is_file($root . '/app.js') ? [$root . '/app.js'] : [],
+    glob($root . '/*/app.js') ?: []
+));
+foreach ($appFiles as $app) {
     $appSrc = file_get_contents($app);
     if ($appSrc === false || strpos($appSrc, 'MBilling.view.user.Form') === false) {
         continue;
@@ -594,8 +624,170 @@ foreach (glob($root . '/*/app.js') ?: [] as $app) {
     $patched++;
 }
 
-echo "Patched theme app.js files: $patched\n";
+if ($controllerPatched || $patched > 0) {
+    echo "Restored SIP auto-create customization; controller="
+        . ($controllerPatched ? 'yes' : 'no')
+        . ", themes=$patched\n";
+}
 TOGGLEPHP
+
+  php "$guard" "$controller" "$MAGNUS_ROOT"
+  php -l "$controller" >/dev/null
+}
+
+install_sip_toggle_guard() {
+  local guard="/usr/local/libexec/magnus-sip-toggle-guard.php"
+  local controller="$MAGNUS_ROOT/protected/controllers/UserController.php"
+  local service_name="magnus-sip-toggle-guard.service"
+  local path_name="magnus-sip-toggle-guard.path"
+  local timer_name="magnus-sip-toggle-guard.timer"
+  local php_bin
+
+  log "Installing persistent SIP auto-create button guard."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+
+  php_bin="$(command -v php)"
+
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    install -m 0644 /dev/stdin "/etc/systemd/system/$service_name" <<EOF
+[Unit]
+Description=Restore MagnusBilling SIP auto-create customization
+After=local-fs.target
+ConditionPathExists=$controller
+
+[Service]
+Type=oneshot
+ExecStart=$php_bin $guard $controller $MAGNUS_ROOT
+EOF
+
+    {
+      cat <<EOF
+[Unit]
+Description=Watch MagnusBilling files for SIP auto-create customization loss
+
+[Path]
+PathChanged=$controller
+EOF
+      while IFS= read -r app_js; do
+        printf 'PathChanged=%s\n' "$app_js"
+      done < <(find -L "$MAGNUS_ROOT" -maxdepth 2 -name app.js -type f -print | sort -u)
+      cat <<EOF
+Unit=$service_name
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    } > "/etc/systemd/system/$path_name"
+    chmod 0644 "/etc/systemd/system/$path_name"
+
+    install -m 0644 /dev/stdin "/etc/systemd/system/$timer_name" <<EOF
+[Unit]
+Description=Periodically verify MagnusBilling SIP auto-create customization
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=$service_name
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    rm -f /etc/cron.d/magnus-sip-toggle-guard
+    systemctl daemon-reload
+    systemctl enable --now "$path_name" "$timer_name"
+    systemctl start "$service_name"
+    return
+  fi
+
+  install -m 0644 /dev/stdin /etc/cron.d/magnus-sip-toggle-guard <<EOF
+* * * * * root $php_bin $guard $controller $MAGNUS_ROOT >/dev/null 2>&1
+EOF
+  log "systemd is unavailable; installed the one-minute cron guard instead."
+}
+
+patch_manual_sip_qualify_default() {
+  local controller="$MAGNUS_ROOT/protected/controllers/SipController.php"
+
+  log "Setting manual SIP user creation default Qualify to yes."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return
+  fi
+
+  php /dev/stdin "$controller" "$MAGNUS_ROOT" <<'SIPQUALIFYPHP'
+<?php
+$controller = $argv[1];
+$root = rtrim($argv[2], '/');
+
+$src = file_get_contents($controller);
+if ($src === false) {
+    fwrite(STDERR, "Cannot read $controller\n");
+    exit(1);
+}
+
+if (strpos($src, "\$values['qualify']   = 'yes';") === false) {
+    $pattern = '/([ \t]*\$values\[\x27regseconds\x27\][ \t]*=[ \t]*1;[ \t]*\R[ \t]*\$values\[\x27context\x27\][ \t]*=[ \t]*\x27billing\x27;[ \t]*\R)([ \t]*\$values\[\x27regexten\x27\][ \t]*=[ \t]*\$values\[\x27name\x27\];)/';
+    $replacement = <<<'NEW'
+${1}            $values['qualify']   = 'yes';
+$2
+NEW;
+    $src = preg_replace($pattern, $replacement, $src, 1, $count);
+    if ($src === null) {
+        fwrite(STDERR, "Regex failed while patching $controller\n");
+        exit(1);
+    }
+    if ($count < 1) {
+        fwrite(STDERR, "Could not find manual SIP create defaults in $controller\n");
+        exit(1);
+    }
+}
+
+if (file_put_contents($controller, $src) === false) {
+    fwrite(STDERR, "Cannot write $controller\n");
+    exit(1);
+}
+
+$patched = 0;
+$appFiles = array_unique(array_merge(
+    is_file($root . '/app.js') ? [$root . '/app.js'] : [],
+    glob($root . '/*/app.js') ?: []
+));
+foreach ($appFiles as $app) {
+    $appSrc = file_get_contents($app);
+    if ($appSrc === false || strpos($appSrc, 'MBilling.view.sip.Form') === false) {
+        continue;
+    }
+
+    $updated = preg_replace(
+        '/(\{xtype:"yesnostringcombo",name:"qualify",fieldLabel:t\("Qualify"\),value:)"no"(,allowBlank:!App\.user\.isAdmin\})/',
+        '$1"yes"$2',
+        $appSrc,
+        -1,
+        $count
+    );
+
+    if ($updated === null) {
+        fwrite(STDERR, "Regex failed while patching $app\n");
+        exit(1);
+    }
+
+    if ($count < 1 || $updated === $appSrc) {
+        continue;
+    }
+
+    if (file_put_contents($app, $updated) === false) {
+        fwrite(STDERR, "Could not patch $app\n");
+        exit(1);
+    }
+    $patched++;
+}
+
+echo "Patched SIP qualify defaults in theme app.js files: $patched\n";
+SIPQUALIFYPHP
 
   php -l "$controller" >/dev/null
 }
@@ -1129,6 +1321,7 @@ PHP
 
 patch_mb_acc
 patch_user_create_sip_toggle
+install_sip_toggle_guard
 patch_manual_sip_qualify_default
 write_did_guard_files
 ensure_extensions_include
@@ -1154,6 +1347,11 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   grep -n 'set_var=MB_ACC' "$MAGNUS_ROOT/protected/components/AsteriskAccess.php" || true
   grep -n 'extensions_public_did.conf' "$ASTERISK_DIR/extensions.conf" || true
   grep -n 'pjsip_custom.conf' "$ASTERISK_DIR/pjsip.conf" || true
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl --no-pager --full status magnus-sip-toggle-guard.path magnus-sip-toggle-guard.timer || true
+  else
+    grep -n 'magnus-sip-toggle-guard' /etc/cron.d/magnus-sip-toggle-guard || true
+  fi
   asterisk -rx "dialplan show public-did-inbound" || true
   asterisk -rx "pjsip show endpoint anonymous" || true
 fi
